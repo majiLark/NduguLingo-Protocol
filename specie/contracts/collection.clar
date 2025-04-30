@@ -1,5 +1,6 @@
-;; Ancestral Language Preservation Protocol Smart Contract - v2.0.0 (Preservation Centers)
-;; Facilitates patronage to endangered language documentation projects and manages preservation center eligibility
+;; Ancestral Language Preservation Protocol Smart Contract - v3.0.0 (Full Feature)
+;; Facilitates patronage to endangered language documentation projects, manages preservation center eligibility,
+;; and provides transparent distribution of resources to verified linguistic initiatives
 
 ;; Error Constants
 (define-constant ERR-NOT-AUTHORIZED (err u100))
@@ -8,6 +9,8 @@
 (define-constant ERR-RESOURCES-UNAVAILABLE (err u103))
 (define-constant ERR-PATRONAGE-TOO-SMALL (err u104))
 (define-constant ERR-PROGRAM-PAUSED (err u105))
+(define-constant ERR-PATRONAGE-INVALID (err u106))
+(define-constant ERR-PRESERVATION-STATUS-INVALID (err u107))
 (define-constant ERR-INVALID-LINGUIST-ADDRESS (err u108))
 
 ;; Core Program Variables
@@ -15,6 +18,7 @@
 (define-data-var preservation-fund uint u0)
 (define-data-var program-is-active bool true)
 (define-data-var patronage-minimum uint u1000000) ;; 1 STX
+(define-data-var priority-mode-active bool false)
 
 ;; Data Storage
 (define-map preservation-centers 
@@ -22,7 +26,8 @@
     {
         center-active: bool,
         resources-allocated: uint,
-        last-allocation-block: uint
+        last-allocation-block: uint,
+        documentation-status: (string-ascii 20)
     }
 )
 
@@ -52,7 +57,7 @@
 )
 
 (define-read-only (check-program-status)
-    (var-get program-is-active)
+    (and (var-get program-is-active) (not (var-get priority-mode-active)))
 )
 
 ;; Helper Functions
@@ -74,6 +79,23 @@
             latest-contribution-block: block-height
         }
     ))
+)
+
+;; Validation Functions
+(define-private (is-patronage-valid (amount uint))
+    (and 
+        (> amount u0)
+        (<= amount u1000000000000) ;; Upper limit for sanity check
+    )
+)
+
+(define-private (is-documentation-status-valid (status-code (string-ascii 20)))
+    (or 
+        (is-eq status-code "documented")
+        (is-eq status-code "in-progress")
+        (is-eq status-code "endangered")
+        (is-eq status-code "stable")
+    )
 )
 
 (define-private (can-be-head-linguist (candidate-address principal))
@@ -108,7 +130,8 @@
             {
                 center-active: true,
                 resources-allocated: u0,
-                last-allocation-block: u0
+                last-allocation-block: u0,
+                documentation-status: "endangered"
             }
         )
         (ok true)
@@ -136,7 +159,8 @@
             {
                 center-active: (get center-active center-info),
                 resources-allocated: (+ (get resources-allocated center-info) resource-amount),
-                last-allocation-block: block-height
+                last-allocation-block: block-height,
+                documentation-status: (get documentation-status center-info)
             }
         )
         (ok resource-amount))
@@ -147,6 +171,7 @@
 (define-public (set-patronage-minimum (new-minimum uint))
     (begin
         (asserts! (is-head-linguist) ERR-NOT-AUTHORIZED)
+        (asserts! (is-patronage-valid new-minimum) ERR-PATRONAGE-INVALID)
         (var-set patronage-minimum new-minimum)
         (ok true)
     )
@@ -157,6 +182,47 @@
         (asserts! (is-head-linguist) ERR-NOT-AUTHORIZED)
         (var-set program-is-active (not (var-get program-is-active)))
         (ok true)
+    )
+)
+
+(define-public (set-priority-mode-on)
+    (begin
+        (asserts! (is-head-linguist) ERR-NOT-AUTHORIZED)
+        (var-set priority-mode-active true)
+        (ok true)
+    )
+)
+
+(define-public (set-priority-mode-off)
+    (begin
+        (asserts! (is-head-linguist) ERR-NOT-AUTHORIZED)
+        (var-set priority-mode-active false)
+        (ok true)
+    )
+)
+
+(define-public (update-documentation-status (center-address principal) (new-status (string-ascii 20)))
+    (begin
+        (asserts! (is-head-linguist) ERR-NOT-AUTHORIZED)
+        (asserts! (is-documentation-status-valid new-status) ERR-PRESERVATION-STATUS-INVALID)
+        (asserts! 
+            (is-some (map-get? preservation-centers center-address)) 
+            ERR-CENTER-NOT-REGISTERED
+        )
+        
+        (let (
+            (current-info (unwrap! (map-get? preservation-centers center-address) ERR-CENTER-NOT-REGISTERED))
+        )
+        (map-set preservation-centers
+            center-address
+            {
+                center-active: (get center-active current-info),
+                resources-allocated: (get resources-allocated current-info),
+                last-allocation-block: (get last-allocation-block current-info),
+                documentation-status: new-status
+            }
+        )
+        (ok true))
     )
 )
 
